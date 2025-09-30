@@ -69,6 +69,25 @@ route /update {
 }
 ```
 
+#### HTTP request payloads
+
+When the `exec` handler serves an HTTP route, clients can supply a JSON request body to tailor each execution.
+
+- `args` (array of strings) are appended after the configured arguments. They support the same Caddy placeholders as static args.
+- `stdin` (string) is streamed to the command's standard input for that request. Omit the field to leave stdin untouched.
+
+Example request:
+
+```
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+        "args": ["--profile=mini"],
+        "stdin": "#EXTM3U\\nhttp://example.com/3.mp4"
+      }' \
+  http://localhost:8080/exec
+```
+
 ### API/JSON
 
 As a top level app for `startup` and `shutdown` commands.

@@ -1,8 +1,13 @@
 package command
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -15,6 +20,8 @@ var (
 	_ caddyhttp.MiddlewareHandler = (*Middleware)(nil)
 )
 
+var runCommand = (*Cmd).run
+
 func init() {
 	caddy.RegisterModule(Middleware{})
 }
@@ -22,6 +29,22 @@ func init() {
 // Middleware implements an HTTP handler that runs shell command.
 type Middleware struct {
 	Cmd
+}
+
+type execRequestPayload struct {
+	Args  []string `json:"args"`
+	Stdin *string  `json:"stdin"`
+}
+
+func isJSONContentType(value string) bool {
+	if value == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json"
 }
 
 // CaddyModule returns the Caddy module information.
@@ -42,13 +65,38 @@ func (m Middleware) Validate() error { return m.Cmd.validate() }
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
 
-	// replace per-request placeholders
-	argv := make([]string, len(m.Args))
-	for index, argument := range m.Args {
-		argv[index] = repl.ReplaceAll(argument, "")
+	var body []byte
+	if r.Body != nil {
+		var err error
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			return caddyhttp.Error(http.StatusBadRequest, fmt.Errorf("reading request body: %w", err))
+		}
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
-	err := m.run(argv)
+	var payload execRequestPayload
+	var stdin io.Reader
+	if len(body) > 0 && isJSONContentType(r.Header.Get("Content-Type")) {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return caddyhttp.Error(http.StatusBadRequest, fmt.Errorf("decoding request body: %w", err))
+		}
+		if payload.Stdin != nil {
+			stdin = strings.NewReader(*payload.Stdin)
+		}
+	}
+
+	// replace per-request placeholders
+	argv := make([]string, 0, len(m.Args)+len(payload.Args))
+	for _, argument := range m.Args {
+		argv = append(argv, repl.ReplaceAll(argument, ""))
+	}
+	for _, argument := range payload.Args {
+		argv = append(argv, repl.ReplaceAll(argument, ""))
+	}
+
+	err := runCommand(&m.Cmd, argv, stdin)
 
 	if m.PassThru {
 		if err != nil {

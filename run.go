@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"io"
 	"os/exec"
 	"time"
 
@@ -17,7 +18,7 @@ type runnerFunc func() error
 
 func (r runnerFunc) Run() error { return r() }
 
-func (c *Cmd) run(args []string) error {
+func (c *Cmd) run(args []string, stdin io.Reader) error {
 	cmdInfo := zap.Any("command", append([]string{c.Command}, args...))
 	log := c.log.With(cmdInfo)
 	startTime := time.Now()
@@ -47,6 +48,7 @@ func (c *Cmd) run(args []string) error {
 			cmd.Stderr = c.errWriter
 		}
 		cmd.Dir = c.Directory
+		cmd.Stdin = stdin
 	}
 
 	wait := func(err error) error {
